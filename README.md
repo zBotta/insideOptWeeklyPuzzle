@@ -1,2 +1,2 @@
 # insideOptWeeklyPuzzle
-Operation Researchs problems
+Operation Research problems
