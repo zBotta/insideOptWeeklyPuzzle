@@ -1,0 +1,2 @@
+# insideOptWeeklyPuzzle
+Operation Researchs problems
