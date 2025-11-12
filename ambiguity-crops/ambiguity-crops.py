@@ -17,6 +17,7 @@ Requirements:
     python .\ambiguity-crops\pyomo_model.py --solve --scenario maxmin
     python .\ambiguity-crops\pyomo_model.py --solve --scenario minmax_regret
     python .\ambiguity-crops\pyomo_model.py --solve --scenario multi_weighted --w-wet 0.7 --w-dry 0.3 --risk-lambda 0.1
+    python .\ambiguity-crops\pyomo_model.py --solve --scenario multi_tchebycheff --alpha-wet 1.0 --alpha-dry 1.0 --rho 0.001
 
 """
 import argparse
@@ -187,6 +188,7 @@ def main():
         "maxmin",
         "minmax_regret",
         "multi_weighted",
+        "multi_tchebycheff",
     ], default="both", help="Scenario/strategy to solve")
     parser.add_argument("--solver", choices=["scip", "ipopt", "cbc"], default="scip", help="Solver to use")
     parser.add_argument("--tee", action="store_true", help="Display solver output")
@@ -198,6 +200,13 @@ def main():
                         help="Weight on dry-scenario profit (for weighted objectives)")
     parser.add_argument("--risk-lambda", dest="risk_lambda", type=float, default=0.0,
                         help="Penalty on imbalance |profit_wet - profit_dry| (>=0). Adds robustness.")
+    # Chebyshev scalarization controls
+    parser.add_argument("--alpha-wet", dest="alpha_wet", type=float, default=1.0,
+                        help="Weight for normalized wet shortfall in Chebyshev scalarization")
+    parser.add_argument("--alpha-dry", dest="alpha_dry", type=float, default=1.0,
+                        help="Weight for normalized dry shortfall in Chebyshev scalarization")
+    parser.add_argument("--rho", dest="rho", type=float, default=1e-3,
+                        help="Augmentation weight on sum of normalized shortfalls (small, e.g., 1e-3)")
     args = parser.parse_args()
 
     m = build_model()
@@ -256,6 +265,49 @@ def main():
             risk_term = 0.0
 
         obj_fct = - (w_wet * m.profit_wet + w_dry * m.profit_dry) + risk_term
+    elif args.scenario == "multi_tchebycheff":
+        # Chebyshev (Tchebycheff) scalarization using targets (excellent) and baselines (okay).
+        # 1) Compute excellent profits by maximizing each scenario separately.
+        print("Computing excellent and okay levels for Chebyshev scalarization...")
+        m_best_wet = build_model()
+        m_best_dry = build_model()
+        m_best_wet.profit = Objective(expr=m_best_wet.profit_wet, sense=maximize)
+        m_best_dry.profit = Objective(expr=m_best_dry.profit_dry, sense=maximize)
+        solve_model(m_best_wet, solver_name=args.solver, tee=False)
+        solve_model(m_best_dry, solver_name=args.solver, tee=False)
+        P_w_star = value(m_best_wet.profit_wet)
+        P_d_star = value(m_best_dry.profit_dry)
+        # "Okay" levels: performance of the other objective at the respective optimum,
+        # floored by the operational minimum (MIN_PROFIT)
+        P_d_at_wbest = value(m_best_wet.profit_dry)
+        P_w_at_dbest = value(m_best_dry.profit_wet)
+        P_w_ok = max(P_w_at_dbest, MIN_PROFIT)
+        P_d_ok = max(P_d_at_wbest, MIN_PROFIT)
+        # Normalization ranges; avoid zero by using at least 1.0
+        range_w = max(P_w_star - P_w_ok, 1.0)
+        range_d = max(P_d_star - P_d_ok, 1.0)
+        print(f"Wet: excellent={P_w_star:.2f}, okay={P_w_ok:.2f}, range={range_w:.2f}")
+        print(f"Dry: excellent={P_d_star:.2f}, okay={P_d_ok:.2f}, range={range_d:.2f}")
+
+        # 2) Define normalized shortfalls sw, sd and the max aggregator t
+        m.sw = Var(domain=NonNegativeReals)
+        m.sd = Var(domain=NonNegativeReals)
+        m.t = Var(domain=NonNegativeReals)
+        # range_w*sw >= P_w_star - profit_wet; similarly for dry
+        m.sw_def = Constraint(expr= range_w * m.sw >= P_w_star - m.profit_wet )
+        m.sd_def = Constraint(expr= range_d * m.sd >= P_d_star - m.profit_dry )
+        # t >= alpha_wet*sw; t >= alpha_dry*sd
+        alpha_w = max(0.0, args.alpha_wet)
+        alpha_d = max(0.0, args.alpha_dry)
+        # Ensure at least one weight is positive to avoid degenerate objective
+        if (alpha_w + alpha_d) == 0:
+            alpha_w = 1.0
+            alpha_d = 1.0
+        m.t_ge_w = Constraint(expr= m.t >= alpha_w * m.sw )
+        m.t_ge_d = Constraint(expr= m.t >= alpha_d * m.sd )
+        rho = max(0.0, args.rho)
+        # Minimize t + rho*(sw + sd)
+        obj_fct = m.t + rho * (m.sw + m.sd)
 
     # Set objective function
     m.J = Objective(expr= obj_fct, 
