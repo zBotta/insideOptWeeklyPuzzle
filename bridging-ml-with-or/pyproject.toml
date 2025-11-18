@@ -1,7 +1,7 @@
 [project]
 name = "bridging-ml-with-or"
 version = "0.1.0"
-description = "Add your description here"
+description = "A mini project to combine a ML prediction with an OR problem"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
