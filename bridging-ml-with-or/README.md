@@ -9,3 +9,15 @@ Concretely, we have four products: milk, chocolate, soup, and ramen. Each produc
 ![alt text](image.png)
 
 **A complication arises from the fact that the first 200 units of soup will expire and have no residual value if not sold in this period. Only units above 200 will retain a value of $1.56 in the next period. 
+
+## How to run
+
+Ensure that you have installed SCIP or CBC (see root README.md) and UV installed `pip install uv`.
+
+Run the jupyter notebook in the UV environment
+
+```
+cd bridging-ml-with-or
+uv sync
+uv run jupyter notebook ./bridging_ml_with_OR.ipynb
+```
